@@ -11,7 +11,8 @@ CLIENT == PESSIMISTIC_CLIENT \union OPTIMISTIC_CLIENT
 
 \* CLIENT_KEY is a set of [Client -> SUBSET KEY]
 \* representing the involved keys of each client.
-CONSTANTS CLIENT_KEY
+CONSTANTS CLIENT_READ_KEY, CLIENT_WRITE_KEY
+CLIENT_KEY == CLIENT_READ_KEY \union CLIENT_WRITE_KEY
 ASSUME \A c \in CLIENT: CLIENT_KEY[c] \subseteq KEY
 
 \* CLIENT_PRIMARY is the primary key of each client.
@@ -151,7 +152,7 @@ TypeOK == /\ req_msgs \in SUBSET ReqMessages
                                           primary : KEY, 
                                           \* As defined above, Ts == Nat \ 0, here we use 0
                                           \* to indicates that there's no min_commit_ts limit.
-                                          min_commit_ts : Nat,
+                                          min_commit_ts : Ts \union {NoneTs},
                                           type : {"prewrite_optimistic",
                                                   "prewrite_pessimistic",
                                                   "lock_key"}]]
@@ -173,6 +174,7 @@ TypeOK == /\ req_msgs \in SUBSET ReqMessages
 
 ClientReadKey(c) == 
   /\ client_state[c] = "init"
+  /\ c \in OPTIMISTIC_CLIENT
   /\ client_state' = [client_state EXCEPT ![c] = "reading"]
   /\ client_ts' = [client_ts EXCEPT ![c].start_ts = next_ts]
   /\ next_ts' = next_ts + 1
@@ -596,6 +598,7 @@ Next ==
         \/ ClientPrewrited(c)
         \/ ClientCommit(c)
   \/ \E c \in PESSIMISTIC_CLIENT :
+        \/ ClientReadKey(c)
         \/ ClientLockKey(c)
         \/ ClientLockedKey(c)
         \/ ClientRetryLockKey(c)
