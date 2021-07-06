@@ -164,8 +164,8 @@ TypeOK == /\ req_msgs \in SUBSET ReqMessages
           /\ client_state \in [CLIENT -> {"init", "locking", "reading", "prewriting", "committing"}]
           /\ client_ts \in [CLIENT -> [start_ts : Ts \union {NoneTs},
                                        commit_ts : Ts \union {NoneTs},
-                                       for_update_ts : Ts \union {NoneTs}],
-                                       min_commit_ts : Nat]
+                                       for_update_ts : Ts \union {NoneTs},
+                                       min_commit_ts : Ts \union {NoneTs}]]
           /\ client_key \in [CLIENT -> [locking: SUBSET KEY, prewriting : SUBSET KEY]]
           /\ next_ts \in Ts
 -----------------------------------------------------------------------------
@@ -237,7 +237,7 @@ ClientCheckTxnStatus(c) ==
     /\ resp.met_optimistic_lock = TRUE
     /\ SendReqs({[type |-> "check_txn_status",
                   start_ts |-> client_ts[c].start_ts,
-                  caller_start_ts |-> next_ts
+                  caller_start_ts |-> next_ts,
                   primary |-> CLIENT_PRIMARY[c],
                   resovling_pessimistic_lock |-> FALSE]})
     /\ UNCHANGED <<resp_msgs, client_vars, key_vars>>
@@ -481,7 +481,7 @@ ServerCheckTxnStatus ==
           pk == req.primary
           start_ts == req.start_ts
           committed == {w \in key_write[pk] : w.start_ts = start_ts /\ w.type = "write"}
-          caller_start_ts == == req.caller_start_ts
+          caller_start_ts == req.caller_start_ts
        IN
           IF \E lock \in key_lock[pk] : lock.ts = start_ts
           \* Found the matching lock whose TTL is expired.
@@ -526,7 +526,7 @@ ServerCheckTxnStatus ==
                             start_ts |-> start_ts,
                             primary |-> pk,
                             commit_ts |-> w.ts] : w \in committed})
-              /\ SendResq({[type |-> "check_txn_status",
+              /\ SendResp({[type |-> "check_txn_status",
                             start_ts |-> start_ts,
                             primary |-> pk,
                             action |-> "committed"]})
