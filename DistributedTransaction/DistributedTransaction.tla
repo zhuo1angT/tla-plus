@@ -1,9 +1,8 @@
 ----------------------- MODULE DistributedTransaction -----------------------
 EXTENDS Integers, FiniteSets
 
-\* The set of keys to read and write
-CONSTANTS  READ_KEY, WRITE_KEY
-KEY == READ_KEY \union WRITE_KEY
+\* The set of all keys
+CONSTANTS KEY
 
 \* The sets of optimistic clients and pessimistic clients.
 CONSTANTS OPTIMISTIC_CLIENT, PESSIMISTIC_CLIENT
@@ -127,13 +126,15 @@ ReqMessages ==
 
 RespMessages ==
           [start_ts : Ts, type : {"prewrited"}, key : KEY]
-  \union  [start_ts : Ts, type : {"get_resp"}, key : READ_KEY, value : Ts, met_optimistic_lock : BOOLEAN]
+  \union  [start_ts : Ts, type : {"get_resp"}, key : KEY, value : Ts, met_optimistic_lock : BOOLEAN]
+
   \* Conceptually, acquire a pessimistic lock of a key is equivalent to reading its value, 
   \* and putting the value in the response can reduce communication. Also, as mentioned
   \* above, we don’t care about the actual value here, so a timestamp can be used 
   \* instead of the value.
   \union  [start_ts : Ts, type : {"locked_key"}, key : KEY, value_ts :  Ts]
-  \union  [start_ts : Ts, type : {"lock_failed"}, key : KEY, latest_commit_ts : Ts]
+  \union  [start_ts : Ts, type : {"lock_failed"}, key : KEY, latest_commit_ts : Ts,
+           lock_ts : Ts, lock_type : {"no_lock", "lock_key", "prewrite_pessimistic", "prewrite_optimistic"}]
   \union  [start_ts : Ts, type : {"committed",
                                   "commit_aborted",
                                   "prewrite_aborted",
@@ -181,7 +182,8 @@ ClientReadKey(c) ==
   /\ SendReqs({[type |-> "get",
                 start_ts |-> client_ts'[c].start_ts,
                 primary |-> CLIENT_PRIMARY[c],
-                key |-> k] : k \in CLIENT_KEY[c]})
+                key |-> k] : k \in CLIENT_READ_KEY[c]})
+  /\ UNCHANGED <<resp_msgs, client_key, key_vars,>>
 
 ClientLockKey(c) ==
   /\ client_state[c] = "reading"
@@ -213,13 +215,31 @@ ClientRetryLockKey(c) ==
       /\ resp.start_ts = client_ts[c].start_ts
       /\ resp.latest_commit_ts > client_ts[c].for_update_ts
       /\ client_ts' = [client_ts EXCEPT ![c].for_update_ts = resp.latest_commit_ts]
+      /\ IF resp.lock_type \in {"lock_key"}
+         THEN
+          /\ SendReqs({[type |-> "check_txn_status",
+                        start_ts |-> client_ts[c].start_ts,
+                        caller_start_ts |-> next_ts,
+                        primary |-> CLIENT_PRIMARY[c],
+                        resoving_pessimistic_lock |-> TRUE]})
+          /\ next_ts' = next_ts + 1
+          /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key>>
+          ELSE IF ~ resp.lock_type = "no_lock"
+          /\ SendReqs({[type |-> "check_txn_status",
+                        start_ts |-> client_ts[c].start_ts,
+                        caller_start_ts |-> next_ts,
+                        primary |-> CLIENT_PRIMARY[c],
+                        resoving_pessimistic_lock |-> FALSE]})
+          /\ next_ts' = next_ts + 1
+          /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key>>
+          ELSE
+          /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key, next_ts>>
       /\ SendReqs({[type |-> "lock_key",
                     start_ts |-> client_ts'[c].start_ts,
                     primary |-> CLIENT_PRIMARY[c],
                     key |-> resp.key,
                     for_update_ts |-> client_ts'[c].for_update_ts]})
-      /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key, next_ts>>
-  
+      
 ClientPrewritePessimistic(c) ==
   /\ client_state[c] = "locking"
   /\ client_key[c].locking = {}
