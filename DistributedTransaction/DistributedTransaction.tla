@@ -418,19 +418,21 @@ ServerPrewritePessimistic ==
         k == req.key
         start_ts == req.start_ts
        IN
-        \* Pessimistic prewrite is allowed only if pressimistic lock is
-        \* acquired, otherwise abort the transaction.
+        \* Pessimistic prewrite is allowed if pressimistic lock is
+        \* acquired, or, there's no lock, and no write record whose 
+        \* commit_ts >= start_ts otherwise abort the transaction.
         /\ IF \E l \in key_lock[k] : l.ts = start_ts
+              \/ ~ \E w \in key_write[k] : w.ts >= start_ts
            THEN
-              /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
+             /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
                                                       primary |-> req.primary,
                                                       type |-> "prewrite_pessimistic"]}]
-              /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
-              /\ SendResp([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
-              /\ UNCHANGED <<req_msgs, client_vars, key_write, next_ts>>
+             /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
+             /\ SendResp([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
+             /\ UNCHANGED <<req_msgs, client_vars, key_write, next_ts>>
            ELSE
-              /\ SendResp([start_ts |-> start_ts, type |-> "prewrite_aborted"])
-              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+             /\ SendResp([start_ts |-> start_ts, type |-> "prewrite_aborted"])
+             /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
 
 ServerPrewriteOptimistic ==
   \E req \in req_msgs :
