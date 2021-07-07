@@ -219,7 +219,7 @@ ClientRetryLockKey(c) ==
       /\ resp.start_ts = client_ts[c].start_ts
       /\ resp.latest_commit_ts > client_ts[c].for_update_ts
       /\ client_ts' = [client_ts EXCEPT ![c].for_update_ts = resp.latest_commit_ts]
-      /\ IF resp.lock_type \in {"lock_key"}
+      /\ IF resp.lock_type = "lock_key" /\ ~resp.lock_ts = client_ts[c].start_ts 
          THEN
           /\ SendReqs({[type |-> "check_txn_status",
                         start_ts |-> client_ts[c].start_ts,
