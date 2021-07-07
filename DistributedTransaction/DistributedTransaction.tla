@@ -304,10 +304,13 @@ ClientCommit(c) ==
 \* Server Actions
 
 \* Write the write column and unlock the lock iff the lock exists.
+unlock_key(k) ==
+  /\ key_lock' = [key_lock EXCEPT ![k] = {}]
+
 commit(pk, start_ts, commit_ts) ==
   \E l \in key_lock[pk] :
     /\ l.ts = start_ts
-    /\ key_lock' = [key_lock EXCEPT ![pk] = {}]
+    /\ unlock_key(pk)
     /\ key_write' = [key_write EXCEPT ![pk] = @ \union {[ts |-> commit_ts,
                                                          type |-> "write",
                                                          start_ts |-> start_ts]}]
@@ -328,7 +331,7 @@ rollback(k, start_ts) ==
   IN
     \* If a lock exists and has the same ts, unlock it.
     /\ IF \E l \in key_lock[k] : l.ts = start_ts
-       THEN key_lock' = [key_lock EXCEPT ![k] = {}]
+       THEN unlock_key(k)
        ELSE UNCHANGED key_lock
     /\ key_data' = [key_data EXCEPT ![k] = @ \ {start_ts}]
     /\ IF 
@@ -524,7 +527,7 @@ ServerCheckTxnStatus ==
                 /\ lock.type = "lock_key"
                 /\ req.resolving_pessimistic_lock = TRUE
             THEN
-              /\ key_lock' = [key_lock EXCEPT ![pk] = {}]
+              /\ unlock_key(pk)
               /\ SendResp({[type |-> "check_txn_status_resp",
                             start_ts |-> start_ts,
                             action |-> "pessimistic_rollback"]})
