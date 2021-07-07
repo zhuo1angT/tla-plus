@@ -173,6 +173,7 @@ TypeOK == /\ req_msgs \in SUBSET ReqMessages
                                        for_update_ts : Ts \union {NoneTs},
                                        min_commit_ts : Ts \union {NoneTs}]]
           /\ client_key \in [CLIENT -> [locking: SUBSET KEY, prewriting : SUBSET KEY]]
+          /\ \A c \in CLIENT: client_key[c].locking \intersect client_key[c].prewriting = {}
           /\ next_ts \in Ts
 -----------------------------------------------------------------------------
 \* Client Actions
@@ -258,7 +259,7 @@ ClientPrewritePessimistic(c) ==
 
 \* Add a function like `ClientRetryReadKey` (?)
 ClientCheckTxnStatus(c) ==
-  /\ client_state = "reading"
+  /\ client_state[c] = "reading"
   /\ \E resp \in resp_msgs :
     /\ resp.type = "get_resp"
     /\ resp.met_optimistic_lock = TRUE
@@ -623,11 +624,13 @@ Init ==
 Next ==
   \/ \E c \in OPTIMISTIC_CLIENT :
         \/ ClientReadKey(c)
+        \/ ClientCheckTxnStatus(c)
         \/ ClientPrewriteOptimistic(c)
         \/ ClientPrewrited(c)
         \/ ClientCommit(c)
   \/ \E c \in PESSIMISTIC_CLIENT :
         \/ ClientReadKey(c)
+        \/ ClientCheckTxnStatus(c)
         \/ ClientLockKey(c)
         \/ ClientLockedKey(c)
         \/ ClientRetryLockKey(c)
