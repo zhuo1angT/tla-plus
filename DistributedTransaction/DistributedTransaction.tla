@@ -734,6 +734,27 @@ MsgTsConsistency ==
           req.commit_ts <= next_ts
   /\ \A resp \in resp_msgs : resp.start_ts <= next_ts
 
+ReadSnapshotIsolation ==
+  /\ \A resp \in resp_msgs :
+      /\ resp.type = "get_resp"
+      /\ LET
+           start_ts == resp.start_ts
+           key == resp.key
+           \* As mentioned before, the value is just a timestamp
+           value == resp.value
+           met_optimistic_lock == resp.met_optimistic_lock
+         IN
+         /\ \E c \in CLIENT:
+           /\ client_ts[c].start_ts = start_ts
+           /\ LET
+                commit_ts == client_ts[c].commit_ts
+              IN
+              IF commit_ts \in Ts THEN
+                /\ ~ \E w \in key_write[key] : 
+                  start_ts <= w.ts /\ w.ts <= commit_ts
+              ELSE
+                /\ TRUE
+
 \* SnapshotIsolation is implied from the following assumptions (but is not
 \* necessary) because SnapshotIsolation means that: 
 \*  (1) Once a transaction is committed, all keys of the transaction should
@@ -747,11 +768,13 @@ MsgTsConsistency ==
 \*    PROOF BY NextTsConsistency, MsgTsConsistency
 \*  (3) All aborted transactions would be always not readable.
 \*    PROOF BY AbortConsistency, MsgMonotonicity
+\* TODO: Explain the ReadSnapshotIsolation
 SnapshotIsolation == /\ CommitConsistency
                      /\ AbortConsistency
                      /\ NextTsMonotonicity
                      /\ MsgMonotonicity
                      /\ MsgTsConsistency
+                     /\ ReadSnapshotIsolation
 -----------------------------------------------------------------------------
 THEOREM Safety ==
   Spec => [](/\ TypeOK
