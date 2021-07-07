@@ -8,10 +8,10 @@ CONSTANTS KEY
 CONSTANTS OPTIMISTIC_CLIENT, PESSIMISTIC_CLIENT
 CLIENT == PESSIMISTIC_CLIENT \union OPTIMISTIC_CLIENT
 
-\* CLIENT_KEY is a set of [Client -> SUBSET KEY]
+\* Functions that maps a client to keys it wants to read, write.
 \* representing the involved keys of each client.
 CONSTANTS CLIENT_READ_KEY, CLIENT_WRITE_KEY
-CLIENT_KEY == CLIENT_READ_KEY \union CLIENT_WRITE_KEY
+CLIENT_KEY == [c \in CLIENT |-> CLIENT_READ_KEY[c] \union CLIENT_WRITE_KEY[c]]
 ASSUME \A c \in CLIENT: CLIENT_KEY[c] \subseteq KEY
 
 \* CLIENT_PRIMARY is the primary key of each client.
@@ -183,7 +183,7 @@ ClientReadKey(c) ==
                 start_ts |-> client_ts'[c].start_ts,
                 primary |-> CLIENT_PRIMARY[c],
                 key |-> k] : k \in CLIENT_READ_KEY[c]})
-  /\ UNCHANGED <<resp_msgs, client_key, key_vars,>>
+  /\ UNCHANGED <<resp_msgs, client_key, key_vars>>
 
 ClientLockKey(c) ==
   /\ client_state[c] = "reading"
@@ -225,15 +225,16 @@ ClientRetryLockKey(c) ==
           /\ next_ts' = next_ts + 1
           /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key>>
           ELSE IF ~ resp.lock_type = "no_lock"
-          /\ SendReqs({[type |-> "check_txn_status",
+          THEN
+            /\ SendReqs({[type |-> "check_txn_status",
                         start_ts |-> client_ts[c].start_ts,
                         caller_start_ts |-> next_ts,
                         primary |-> CLIENT_PRIMARY[c],
                         resoving_pessimistic_lock |-> FALSE]})
-          /\ next_ts' = next_ts + 1
-          /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key>>
+            /\ next_ts' = next_ts + 1
+            /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key>>
           ELSE
-          /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key, next_ts>>
+            /\ UNCHANGED <<resp_msgs, key_vars, client_state, client_key, next_ts>>
       /\ SendReqs({[type |-> "lock_key",
                     start_ts |-> client_ts'[c].start_ts,
                     primary |-> CLIENT_PRIMARY[c],
