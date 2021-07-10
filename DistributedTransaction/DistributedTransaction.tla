@@ -753,12 +753,11 @@ ReadSnapshotIsolation ==
          IN
          /\ \E c \in CLIENT:
            /\ client_ts[c].start_ts = start_ts
-           /\ LET
-                commit_ts == client_ts[c].commit_ts
-              IN
-              IF commit_ts \in Ts THEN
-                /\ ~ \E w \in key_write[key] : 
-                  start_ts <= w.ts /\ w.ts <= commit_ts
+           /\ IF client_ts[c].commit_ts \in Ts THEN
+                /\ \A w \in key_write[key] :
+                  \/ w.type = "rollback"
+                  \/ w.start_ts > start_ts
+                  \/ w.ts < start_ts 
               ELSE
                 /\ TRUE
 
