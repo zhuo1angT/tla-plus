@@ -258,9 +258,8 @@ ClientPrewritePessimistic(c) ==
                 key |-> k] : k \in CLIENT_KEY[c]})
   /\ UNCHANGED <<resp_msgs, key_vars, client_ts, next_ts>>
 
-\* Add a function like `ClientRetryReadKey` (?)
-ClientCheckTxnStatus(c) ==
-  /\ client_state[c] = "reading"
+ClientReadFailedCheckTxnStatus(c) ==
+  /\ client_state[c] \in {"reading"}
   /\ \E resp \in resp_msgs :
     /\ resp.type = "get_resp"
     /\ resp.met_optimistic_lock = TRUE
@@ -622,13 +621,12 @@ Init ==
 Next ==
   \/ \E c \in OPTIMISTIC_CLIENT :
         \/ ClientReadKey(c)
-        \/ ClientCheckTxnStatus(c)
+        \/ ClientReadFailedCheckTxnStatus(c)
         \/ ClientPrewriteOptimistic(c)
         \/ ClientPrewrited(c)
         \/ ClientCommit(c)
   \/ \E c \in PESSIMISTIC_CLIENT :
         \/ ClientReadKey(c)
-        \/ ClientCheckTxnStatus(c)
         \/ ClientLockKey(c)
         \/ ClientLockedKey(c)
         \/ ClientRetryLockKey(c)
