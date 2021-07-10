@@ -138,7 +138,7 @@ RespMessages ==
   \* above, we don’t care about the actual value here, so a timestamp can be used 
   \* instead of the value.
   \union  [start_ts : Ts, type : {"locked_key"}, key : KEY, value_ts : Ts \union {NoneTs}]
-  \union  [start_ts : Ts, type : {"lock_failed"}, key : KEY, latest_commit_ts : Ts,
+  \union  [start_ts : Ts, type : {"lock_failed"}, key : KEY, latest_commit_ts : Ts \union {NoneTs},
            lock_ts : Ts \union {NoneTs}, lock_type : {"no_lock", "lock_key", "prewrite_pessimistic", "prewrite_optimistic"}]
   \union  [start_ts : Ts, type : {"committed",
                                   "commit_aborted",
@@ -221,7 +221,7 @@ ClientRetryLockKey(c) ==
       /\ resp.start_ts = client_ts[c].start_ts
       /\ resp.latest_commit_ts > client_ts[c].for_update_ts
       /\ client_ts' = [client_ts EXCEPT ![c].for_update_ts = resp.latest_commit_ts]
-      /\ IF resp.lock_type = "lock_key" /\ ~resp.lock_ts = client_ts[c].start_ts 
+      /\ IF resp.lock_type = "lock_key" /\ ~ resp.lock_ts = client_ts[c].start_ts 
          THEN
           /\ SendReqs({[type |-> "check_txn_status",
                         start_ts |-> client_ts[c].start_ts,
@@ -358,52 +358,63 @@ ServerLockKey ==
        IN
         \* Pessimistic lock is allowed only if no stale lock exists.  If
         \* there is one, wait until ClientCheckTxnStatus to clean it up.
-        /\ key_lock[k] = {}
-        /\ LET
-              latest_write == {w \in key_write[k] : \A w2 \in key_write[k] : w.ts >= w2.ts}
-              
-              all_commits == {w \in key_write[k] : w.type = "write"}
-              latest_commit == {w \in all_commits : \A w2 \in all_commits : w.ts >= w2.ts}
-              commit_read == {w \in all_commits : \A w2 \in all_commits : w2.ts <= w.ts \/ w2.ts >= start_ts}
-           IN
-              IF \E w \in key_write[k] : w.start_ts = start_ts /\ w.type = "rollback"
-              THEN
-                \* If corresponding rollback record is found, which
-                \* indicates that the transcation is rollbacked, abort the
-                \* transaction.
-                /\ SendResp([start_ts |-> start_ts, type |-> "lock_key_aborted"])
-                /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
-              ELSE
-                \* Acquire pessimistic lock only if for_update_ts of req
-                \* is greater or equal to the latest "write" record.
-                \* Because if the latest record is "write", it means that
-                \* a new version is committed after for_update_ts, which
-                \* violates Read Committed guarantee.
-                \/ /\ ~ \E w \in latest_commit : w.ts > req.for_update_ts
-                   /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
-                                                            primary |-> req.primary,
-                                                            min_commit_ts |-> NoneTs,
-                                                            type |-> "lock_key"]}]
-                   /\ IF ~ commit_read = {} 
-                      THEN
-                        \* Actually there's only one msg to be sent.
-                        /\ SendResps({[start_ts |-> start_ts, type |-> "locked_key", key |-> k, value_ts |-> w2.start_ts] :
-                                       w2 \in commit_read})
-                        /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
-                      ELSE
-                        /\ SendResp([start_ts |-> start_ts, type |-> "locked_key", key |-> k, value_ts |-> NoneTs])
-                        /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
-                \* Otherwise, reject the request and let client to retry
-                \* with new for_update_ts.
-                \/ \E w \in latest_commit :
-                    /\ w.ts > req.for_update_ts
-                    /\ SendResp([start_ts |-> start_ts,
-                                 type |-> "lock_failed",
-                                 key |-> k,
-                                 latest_commit_ts |-> w.ts, 
-                                 lock_ts |-> NoneTs,
-                                 lock_type |-> "no_lock"])
-                    /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+        IF key_lock[k] = {} THEN
+          /\ LET
+                latest_write == {w \in key_write[k] : \A w2 \in key_write[k] : w.ts >= w2.ts}
+                
+                all_commits == {w \in key_write[k] : w.type = "write"}
+                latest_commit == {w \in all_commits : \A w2 \in all_commits : w.ts >= w2.ts}
+                commit_read == {w \in all_commits : \A w2 \in all_commits : w2.ts <= w.ts \/ w2.ts >= start_ts}
+             IN
+                IF \E w \in key_write[k] : w.start_ts = start_ts /\ w.type = "rollback"
+                THEN
+                  \* If corresponding rollback record is found, which
+                  \* indicates that the transcation is rollbacked, abort the
+                  \* transaction.
+                  /\ SendResp([start_ts |-> start_ts, type |-> "lock_key_aborted"])
+                  /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+                ELSE
+                  \* Acquire pessimistic lock only if for_update_ts of req
+                  \* is greater or equal to the latest "write" record.
+                  \* Because if the latest record is "write", it means that
+                  \* a new version is committed after for_update_ts, which
+                  \* violates Read Committed guarantee.
+                  \/ /\ ~ \E w \in latest_commit : w.ts > req.for_update_ts
+                    /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
+                                                              primary |-> req.primary,
+                                                              min_commit_ts |-> NoneTs,
+                                                              type |-> "lock_key"]}]
+                    /\ IF ~ commit_read = {} 
+                        THEN
+                          \* Actually there's only one msg to be sent.
+                          /\ SendResps({[start_ts |-> start_ts, type |-> "locked_key", key |-> k, value_ts |-> w2.start_ts] :
+                                        w2 \in commit_read})
+                          /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
+                        ELSE
+                          /\ SendResp([start_ts |-> start_ts, type |-> "locked_key", key |-> k, value_ts |-> NoneTs])
+                          /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
+                  \* Otherwise, reject the request and let client to retry
+                  \* with new for_update_ts.
+                  \/ \E w \in latest_commit :
+                      /\ w.ts > req.for_update_ts
+                      /\ SendResp([start_ts |-> start_ts,
+                                  type |-> "lock_failed",
+                                  key |-> k,
+                                  latest_commit_ts |-> w.ts, 
+                                  lock_ts |-> NoneTs,
+                                  lock_type |-> "no_lock"])
+                      /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+        ELSE IF \E l \in key_lock[k] : ~ l.ts = start_ts 
+        THEN
+          /\ SendResps({[start_ts |-> start_ts,
+                       type |-> "lock_failed",
+                       key |-> k,
+                       latest_commit_ts |-> NoneTs,
+                       lock_ts |-> l.ts,
+                       lock_type |-> l.type] : l \in key_lock[k]})
+          /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+        ELSE
+          /\ UNCHANGED <<vars>>
 
 ServerReadKey ==
   \E req \in req_msgs :
