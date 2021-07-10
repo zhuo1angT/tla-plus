@@ -139,7 +139,7 @@ ReqMessages ==
 
 RespMessages ==
           [start_ts : Ts, type : {"prewrited"}, key : KEY]
-  \union  [start_ts : Ts, type : {"get_resp"}, key : KEY, value : Ts, met_optimistic_lock : BOOLEAN]
+  \union  [start_ts : Ts, type : {"get_resp"}, key : KEY, value : Ts \union {NoneTs}, met_optimistic_lock : BOOLEAN]
 
   \* Conceptually, acquire a pessimistic lock of a key is equivalent to reading its value, 
   \* and putting the value in the response can reduce communication. Also, as mentioned
@@ -190,13 +190,11 @@ TypeOK == /\ req_msgs \in SUBSET ReqMessages
 
 ClientReadKey(c, k) == 
   /\ ~ client_state[c] = "init"
-  /\ client_key_read_times[c][k] < MAX_CLIENT_READ_TIMES
-  /\ client_key_read_times' = [client_key_read_times EXCEPT ![c][k] = client_key_read_times[c][k] + 1] 
   /\ SendReq([type |-> "get",
                start_ts |-> client_ts[c].start_ts,
                primary |-> CLIENT_PRIMARY[c],
                key |-> k])
-  /\ UNCHANGED <<resp_msgs, client_key, client_state, client_ts, key_vars, next_ts>>
+  /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
 
 ClientLockKey(c) ==
   /\ client_state[c] = "init"
@@ -276,8 +274,8 @@ ClientReadFailedCheckTxnStatus(c) ==
                   start_ts |-> client_ts[c].start_ts,
                   caller_start_ts |-> next_ts,
                   primary |-> CLIENT_PRIMARY[c],
-                  resovling_pessimistic_lock |-> FALSE]})
-    /\ UNCHANGED <<resp_msgs, client_vars, key_vars>>
+                  resolving_pessimistic_lock |-> FALSE]})
+    /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
 
 ClientPrewriteOptimistic(c) ==
   /\ client_state[c] = "init"
@@ -430,17 +428,35 @@ ServerLockKey ==
 ServerReadKey ==
   \E req \in req_msgs :
     /\ req.type = "get"
-    /\ LET
-        k == req.key
-        start_ts == req.start_ts
-       IN
-       /\ IF ~ \E l \in key_lock : l.type = "prewrite_optimistic"
-          THEN
-            /\ SendResp([start_ts |-> start_ts, type |-> "get_resp", key |-> k, value |-> Ts, met_optimistic_lock |-> FALSE])
-            /\ UNCHANGED <<req_msgs, client_vars, key_vars>>
-          ELSE
-            /\ SendResp([start_ts |-> start_ts, type |-> "get_resp", key |-> k, value |-> NoneTs, met_optimistic_lock |-> TRUE])
-            /\ UNCHANGED <<req_msgs, client_vars, key_vars>>
+    /\ \E c \in CLIENT : 
+      /\ client_ts[c].start_ts = req.start_ts
+      /\ client_key_read_times[c][req.key] < MAX_CLIENT_READ_TIMES
+      \*/\ client_key_read_times' = [client_key_read_times EXCEPT ![c][req.key] = client_key_read_times[c][req.key] + 1] 
+      /\ LET
+           k == req.key
+           start_ts == req.start_ts
+
+           latest_write == {w \in key_write[k] : \A w2 \in key_write[k] : w.ts >= w2.ts}
+                
+           all_commits == {w \in key_write[k] : w.type = "write"}
+           latest_commit == {w \in all_commits : \A w2 \in all_commits : w.ts >= w2.ts}
+           commit_read == {w \in all_commits : \A w2 \in all_commits : w2.ts <= w.ts \/ w2.ts >= start_ts}
+         IN
+         /\ IF ~ \E l \in key_lock[k] : l.type = "prewrite_optimistic"
+            THEN
+              /\ SendResps({[start_ts |-> start_ts, 
+                            type |-> "get_resp", 
+                            key |-> k, 
+                            value |-> w.start_ts, 
+                            met_optimistic_lock |-> FALSE] : w \in commit_read})
+              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+            ELSE
+              /\ SendResp([start_ts |-> start_ts,
+                           type |-> "get_resp", 
+                           key |-> k, 
+                           value |-> NoneTs, 
+                           met_optimistic_lock |-> TRUE])
+              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
 
 ServerPrewritePessimistic ==
   \E req \in req_msgs :
@@ -657,6 +673,7 @@ Next ==
   \/ \E c \in CLIENT :
     \E k \in CLIENT_READ_KEY[c] :
       /\ ClientReadKey(c, k)  
+  \/ ServerReadKey
   \/ ServerLockKey
   \/ ServerPrewritePessimistic
   \/ ServerPrewriteOptimistic
