@@ -3,6 +3,7 @@ EXTENDS DistributedTransaction, TLC
 
 CONSTANT k1, k2, k3
 CONSTANT c1, c2, c3
+CONSTANT max_read_times
 
 Keys == {k1, k2, k3}
 OptimistiicClient == {c3}
