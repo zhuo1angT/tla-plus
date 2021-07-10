@@ -96,6 +96,7 @@ vars == <<msg_vars, client_vars, key_vars, next_ts>>
 
 SendReqs(msgs) == req_msgs' = req_msgs \union msgs
 SendResp(msg) == resp_msgs' = resp_msgs \union {msg}
+SendResps(msgs) == resp_msgs' = resp_msgs \union msgs
 -----------------------------------------------------------------------------
 \* Type Definitions
 
@@ -136,9 +137,9 @@ RespMessages ==
   \* and putting the value in the response can reduce communication. Also, as mentioned
   \* above, we don’t care about the actual value here, so a timestamp can be used 
   \* instead of the value.
-  \union  [start_ts : Ts, type : {"locked_key"}, key : KEY, value_ts :  Ts]
+  \union  [start_ts : Ts, type : {"locked_key"}, key : KEY, value_ts : Ts \union {NoneTs}]
   \union  [start_ts : Ts, type : {"lock_failed"}, key : KEY, latest_commit_ts : Ts,
-           lock_ts : Ts, lock_type : {"no_lock", "lock_key", "prewrite_pessimistic", "prewrite_optimistic"}]
+           lock_ts : Ts \union {NoneTs}, lock_type : {"no_lock", "lock_key", "prewrite_pessimistic", "prewrite_optimistic"}]
   \union  [start_ts : Ts, type : {"committed",
                                   "commit_aborted",
                                   "prewrite_aborted",
@@ -191,7 +192,7 @@ ClientReadKey(c) ==
   /\ UNCHANGED <<resp_msgs, client_key, key_vars>>
 
 ClientLockKey(c) ==
-  /\ client_state[c] = "reading"
+  /\ client_state[c] = "init"
   /\ client_state' = [client_state EXCEPT ![c] = "locking"]
   /\ client_ts' = [client_ts EXCEPT ![c].start_ts = next_ts, ![c].for_update_ts = next_ts]
   /\ next_ts' = next_ts + 1
@@ -335,8 +336,7 @@ rollback(k, start_ts) ==
        THEN unlock_key(k)
        ELSE UNCHANGED key_lock
     /\ key_data' = [key_data EXCEPT ![k] = @ \ {start_ts}]
-    /\ IF 
-          /\ ~ \E w \in key_write[k]: w.ts = start_ts
+    /\ IF ~ \E w \in key_write[k]: w.ts = start_ts
        THEN
             key_write' = [key_write EXCEPT
               ![k] = 
@@ -358,13 +358,14 @@ ServerLockKey ==
         start_ts == req.start_ts
        IN
         \* Pessimistic lock is allowed only if no stale lock exists.  If
-        \* there is one, wait until ServerCleanupStaleLock to clean it up.
+        \* there is one, wait until ClientCheckTxnStatus to clean it up.
         /\ key_lock[k] = {}
         /\ LET
               latest_write == {w \in key_write[k] : \A w2 \in key_write[k] : w.ts >= w2.ts}
               
               all_commits == {w \in key_write[k] : w.type = "write"}
               latest_commit == {w \in all_commits : \A w2 \in all_commits : w.ts >= w2.ts}
+              commit_read == {w \in all_commits : \A w2 \in all_commits : w2.ts <= w.ts \/ w2.ts >= start_ts}
            IN
               IF \E w \in key_write[k] : w.start_ts = start_ts /\ w.type = "rollback"
               THEN
@@ -384,8 +385,15 @@ ServerLockKey ==
                                                             primary |-> req.primary,
                                                             min_commit_ts |-> NoneTs,
                                                             type |-> "lock_key"]}]
-                   /\ SendResp([start_ts |-> start_ts, type |-> "locked_key", key |-> k])
-                   /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
+                   /\ IF ~ commit_read = {} 
+                      THEN
+                        \* Actually there's only one msg to be sent.
+                        /\ SendResps({[start_ts |-> start_ts, type |-> "locked_key", key |-> k, value_ts |-> w2.start_ts] :
+                                       w2 \in commit_read})
+                        /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
+                      ELSE
+                        /\ SendResp([start_ts |-> start_ts, type |-> "locked_key", key |-> k, value_ts |-> NoneTs])
+                        /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
                 \* Otherwise, reject the request and let client to retry
                 \* with new for_update_ts.
                 \/ \E w \in latest_commit :
@@ -393,7 +401,9 @@ ServerLockKey ==
                     /\ SendResp([start_ts |-> start_ts,
                                  type |-> "lock_failed",
                                  key |-> k,
-                                 latest_commit_ts |-> w.ts])
+                                 latest_commit_ts |-> w.ts, 
+                                 lock_ts |-> NoneTs,
+                                 lock_type |-> "no_lock"])
                     /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
 
 ServerReadKey ==
@@ -426,7 +436,8 @@ ServerPrewritePessimistic ==
            THEN
              /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
                                                       primary |-> req.primary,
-                                                      type |-> "prewrite_pessimistic"]}]
+                                                      type |-> "prewrite_pessimistic",
+                                                      min_commit_ts |-> NoneTs]}]
              /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
              /\ SendResp([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
              /\ UNCHANGED <<req_msgs, client_vars, key_write, next_ts>>
@@ -447,7 +458,7 @@ ServerPrewriteOptimistic ==
               /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
            ELSE
               \* Optimistic prewrite is allowed only if no stale lock exists.  If
-              \* there is one, wait until ServerCleanupStaleLock to clean it up.
+              \* there is one, wait until ClientCheckTxnStatus to clean it up.
               /\ \/ key_lock[k] = {} 
                  \/ \E l \in key_lock[k] : l.ts = start_ts
               /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
@@ -481,21 +492,6 @@ ServerCommit ==
             \* Otherwise, abort the transaction.
             /\ SendResp([start_ts |-> start_ts, type |-> "commit_aborted"])
             /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
-
-\* In the spec, the primary key with a lock may clean up itself
-\* spontaneously.  There is no need to model a client to request clean up
-\* because there is no difference between a optimistic client trying to
-\* read a key that has lock timeouted and the key trying to unlock itself.
-ServerCleanupStaleLock ==
-  \E k \in KEY :
-    \E l \in key_lock[k] :
-      /\ SendReqs({[type |-> "check_txn_status",
-                    start_ts |-> l.ts,
-                    caller_start_ts |-> next_ts,
-                    primary |-> l.primary,
-                    resolving_pessimistic_lock |-> l.type = "lock_key"]})
-      /\ next_ts' = next_ts + 1
-      /\ UNCHANGED <<resp_msgs, client_vars, key_vars>>
 
 \* Clean up the stale transaction by checking the status of the primary key.
 \*
@@ -643,7 +639,6 @@ Next ==
   \/ ServerPrewritePessimistic
   \/ ServerPrewriteOptimistic
   \/ ServerCommit
-  \/ ServerCleanupStaleLock
   \/ ServerCheckTxnStatus
   \/ ServerResolveCommitted
   \/ ServerResolveRollbacked
