@@ -142,7 +142,7 @@ ReqMessages ==
   \*
   \* In TLA+ spec, the TTL is considered constantly expired when the action is taken, so the
   \* `rollback_if_not_exist` is assumed true, thus no need to carry it in the message.
-  \union  [start_ts : Ts, caller_start_ts : Ts, primary : KEY, type : {"check_txn_status"},
+  \union  [start_ts : Ts, current_ts : Ts, primary : KEY, type : {"check_txn_status"},
            resolving_pessimistic_lock : BOOLEAN]
 
 RespMessages ==
@@ -244,7 +244,7 @@ ClientRetryLockKey(c) ==
               /\ client_check_txn_times' = [client_check_txn_times EXCEPT ![c] = @ + 1]
               /\ SendReqs({[type |-> "check_txn_status",
                             start_ts |-> client_ts[c].start_ts,
-                            caller_start_ts |-> next_ts,
+                            current_ts |-> next_ts,
                             primary |-> CLIENT_PRIMARY[c],
                             resolving_pessimistic_lock |-> TRUE]})
               /\ next_ts' = next_ts + 1
@@ -256,7 +256,7 @@ ClientRetryLockKey(c) ==
               /\ client_check_txn_times' = [client_check_txn_times EXCEPT ![c] = @ + 1]
               /\ SendReqs({[type |-> "check_txn_status",
                             start_ts |-> client_ts[c].start_ts,
-                            caller_start_ts |-> next_ts,
+                            current_ts |-> next_ts,
                             primary |-> CLIENT_PRIMARY[c],
                             resolving_pessimistic_lock |-> FALSE]})
               /\ next_ts' = next_ts + 1
@@ -294,7 +294,7 @@ ClientReadFailedCheckTxnStatus(c) ==
     /\ client_check_txn_times' = [client_check_txn_times EXCEPT ![c] = @ + 1]
     /\ SendReqs({[type |-> "check_txn_status",
                   start_ts |-> client_ts[c].start_ts,
-                  caller_start_ts |-> next_ts,
+                  current_ts |-> next_ts,
                   primary |-> CLIENT_PRIMARY[c],
                   resolving_pessimistic_lock |-> FALSE]})
     /\ next_ts' = next_ts + 1
@@ -579,7 +579,7 @@ ServerCheckTxnStatus ==
           pk == req.primary
           start_ts == req.start_ts
           committed == {w \in key_write[pk] : w.start_ts = start_ts /\ w.type = "write"}
-          caller_start_ts == req.caller_start_ts
+          current_ts == req.current_ts
        IN
           IF \E lock \in key_lock[pk] : lock.ts = start_ts
           \* Found the matching lock.
@@ -614,11 +614,11 @@ ServerCheckTxnStatus ==
               /\ client_ts[c].start_ts = start_ts 
               /\ client_check_txn_times[c] < MAX_CLIENT_CHECK_TXN_TIMES
             /\ \E lock \in key_lock[pk] :
-              /\ lock.min_commit_ts < caller_start_ts
+              /\ lock.min_commit_ts < current_ts 
               /\ key_lock' = [key_lock EXCEPT ![pk] = {[ts |-> lock.ts,
                                                        type |-> lock.type,
                                                        primary |-> lock.primary,
-                                                       min_commit_ts |-> caller_start_ts]}]
+                                                       min_commit_ts |-> current_ts]}]
               /\ SendResp([type |-> "check_txn_status_resp",
                             start_ts |-> start_ts,
                             action |-> "min_commit_ts_pushed"])
