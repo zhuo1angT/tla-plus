@@ -431,15 +431,12 @@ ServerReadKey ==
     /\ \E c \in CLIENT : 
       /\ client_ts[c].start_ts = req.start_ts
       /\ client_key_read_times[c][req.key] < MAX_CLIENT_READ_TIMES
-      \*/\ client_key_read_times' = [client_key_read_times EXCEPT ![c][req.key] = client_key_read_times[c][req.key] + 1] 
+      /\ client_key_read_times' = [client_key_read_times EXCEPT ![c] = [client_key_read_times[c] EXCEPT ![req.key] = client_key_read_times[c][req.key] + 1]]
       /\ LET
            k == req.key
            start_ts == req.start_ts
 
-           latest_write == {w \in key_write[k] : \A w2 \in key_write[k] : w.ts >= w2.ts}
-                
            all_commits == {w \in key_write[k] : w.type = "write"}
-           latest_commit == {w \in all_commits : \A w2 \in all_commits : w.ts >= w2.ts}
            commit_read == {w \in all_commits : \A w2 \in all_commits : w2.ts <= w.ts \/ w2.ts >= start_ts}
          IN
          /\ IF ~ \E l \in key_lock[k] : l.type = "prewrite_optimistic"
@@ -449,14 +446,14 @@ ServerReadKey ==
                             key |-> k, 
                             value |-> w.start_ts, 
                             met_optimistic_lock |-> FALSE] : w \in commit_read})
-              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+              /\ UNCHANGED <<req_msgs, client_state, client_ts, client_key, key_vars, next_ts>>
             ELSE
               /\ SendResp([start_ts |-> start_ts,
                            type |-> "get_resp", 
                            key |-> k, 
                            value |-> NoneTs, 
                            met_optimistic_lock |-> TRUE])
-              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+              /\ UNCHANGED <<req_msgs, client_state, client_ts, client_key, key_vars, next_ts>>
 
 ServerPrewritePessimistic ==
   \E req \in req_msgs :
