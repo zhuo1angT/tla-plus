@@ -248,7 +248,8 @@ ClientRetryLockKey(c) ==
                             primary |-> CLIENT_PRIMARY[c],
                             resolving_pessimistic_lock |-> TRUE]})
               /\ next_ts' = next_ts + 1
-              /\ UNCHANGED <<resp_msgs, key_vars, client_vars>>
+              /\ UNCHANGED <<resp_msgs, key_vars, client_state,
+                             client_ts, client_key, client_key_read_times>>
             ELSE  
               /\ ~ resp.lock_type = "no_lock"
               /\ client_check_txn_times[c] < MAX_CLIENT_CHECK_TXN_TIMES 
@@ -259,7 +260,8 @@ ClientRetryLockKey(c) ==
                             primary |-> CLIENT_PRIMARY[c],
                             resolving_pessimistic_lock |-> FALSE]})
               /\ next_ts' = next_ts + 1
-              /\ UNCHANGED <<resp_msgs, key_vars, client_vars>>
+              /\ UNCHANGED <<resp_msgs, key_vars, client_state,
+                             client_ts, client_key, client_key_read_times>>
       \/ /\ resp.type = "lock_failed"
          /\ resp.start_ts = client_ts[c].start_ts
          /\ resp.latest_commit_ts > client_ts[c].for_update_ts
@@ -296,7 +298,8 @@ ClientReadFailedCheckTxnStatus(c) ==
                   primary |-> CLIENT_PRIMARY[c],
                   resolving_pessimistic_lock |-> FALSE]})
     /\ next_ts' = next_ts + 1
-    /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+    /\ UNCHANGED <<resp_msgs, client_state, client_ts, client_key, 
+                   client_key_read_times, key_vars>>
 
 ClientPrewriteOptimistic(c) ==
   /\ client_state[c] = "init"
@@ -605,7 +608,13 @@ ServerCheckTxnStatus ==
               /\ UNCHANGED <<client_vars, next_ts>>
           \/
             \* Push min_commit_ts
-            \E lock \in key_lock[pk] :
+            \* We must ensure that this is not the last chance for this txn 
+            \* to be checked, otherwise, we would make a deadlock.
+            /\ \A c \in CLIENT :
+              /\ client_ts[c].start_ts = start_ts 
+              /\ client_check_txn_times[c] < MAX_CLIENT_CHECK_TXN_TIMES
+            /\ \E lock \in key_lock[pk] :
+              /\ lock.min_commit_ts < caller_start_ts
               /\ key_lock' = [key_lock EXCEPT ![pk] = {[ts |-> lock.ts,
                                                        type |-> lock.type,
                                                        primary |-> lock.primary,
