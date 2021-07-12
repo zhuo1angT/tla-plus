@@ -500,8 +500,9 @@ ServerPrewritePessimistic ==
         \* Pessimistic prewrite is allowed if pressimistic lock is
         \* acquired, or, there's no lock, and no write record whose 
         \* commit_ts >= start_ts otherwise abort the transaction.
-        /\ IF \E l \in key_lock[k] : 
-             l.ts = start_ts \/ ~ \E w \in key_write[k] : w.ts >= start_ts
+        /\ IF 
+             \/ ~ \E w \in key_write[k] : w.ts >= start_ts
+             \/ \E l \in key_lock[k] : l.ts = start_ts
            THEN
              /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
                                                       primary |-> req.primary,
