@@ -227,7 +227,7 @@ ClientRetryLockKey(c) ==
             THEN
               /\ SendReqs({[type |-> "check_txn_status",
                             start_ts |-> resp.start_ts,
-                            caller_start_ts |-> next_ts,
+                            caller_start_ts |-> NoneTs,
                             primary |-> CLIENT_PRIMARY[c],
                             resolving_pessimistic_lock |-> TRUE]})
               /\ UNCHANGED <<resp_msgs, key_vars, client_vars, next_ts>>
@@ -235,7 +235,7 @@ ClientRetryLockKey(c) ==
               /\ ~ resp.lock_type = "no_lock"
               /\ SendReqs({[type |-> "check_txn_status",
                             start_ts |-> resp.start_ts,
-                            caller_start_ts |-> next_ts,
+                            caller_start_ts |-> NoneTs,
                             primary |-> CLIENT_PRIMARY[c],
                             resolving_pessimistic_lock |-> FALSE]})
               /\ UNCHANGED <<resp_msgs, key_vars, client_vars, next_ts>>
