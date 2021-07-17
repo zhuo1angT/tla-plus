@@ -299,7 +299,6 @@ ClientPrewrited(c) ==
 ClientCommit(c) ==
   /\ client_state[c] = "prewriting"
   /\ client_key[c].prewriting = {}
-  /\ next_ts > client_ts[c].min_commit_ts
   /\ client_state' = [client_state EXCEPT ![c] = "committing"]
   /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = next_ts]
   /\ next_ts' = next_ts + 1
@@ -515,7 +514,9 @@ ServerCommit ==
           /\ SendResp([start_ts |-> start_ts, type |-> "committed"])
           /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
         ELSE
-          IF \E l \in key_lock[pk] : l.ts = start_ts
+          IF \E l \in key_lock[pk] :
+            /\ l.ts = start_ts
+            /\ next_ts > l.min_commit_ts
           THEN
             \* Commit the key only if the prewrite lock exists.
             /\ commit(pk, start_ts, req.commit_ts)
@@ -561,20 +562,20 @@ ServerCheckTxnStatus ==
             THEN
               /\ unlock_key(pk)
               /\ SendResp([type |-> "check_txn_status_resp",
-                            start_ts |-> start_ts,
-                            action |-> "pessimistic_rollbacked"])
+                           start_ts |-> start_ts,
+                           action |-> "pessimistic_rollbacked"])
               /\ UNCHANGED <<req_msgs, key_data, key_write, client_vars, next_ts>>
             ELSE
               /\ rollback(pk, start_ts)
               /\ SendReqs({[type |-> "resolve_rollbacked",
-                            start_ts |-> start_ts,
-                            primary |-> pk]})
+                           start_ts |-> start_ts,
+                           primary |-> pk]})
               /\ SendResp([type |-> "check_txn_status_resp",
-                            start_ts |-> start_ts,
-                            action |-> "rollbacked"])
+                           start_ts |-> start_ts,
+                           action |-> "rollbacked"])
               /\ UNCHANGED <<client_vars, next_ts>>
           \/
-            \* Push min_commit_ts
+            \* Push min_commit_ts.
             \* We must ensure that this is not the last chance for this txn 
             \* to be checked, otherwise, we would make a deadlock.
             /\ \A c \in CLIENT : client_ts[c].start_ts = start_ts 
