@@ -1,7 +1,7 @@
 ----------------------- MODULE DistributedTransaction -----------------------
 EXTENDS Integers, FiniteSets
 
-\* The set of all keys
+\* The set of all keys.
 CONSTANTS KEY
 
 \* The sets of optimistic clients and pessimistic clients.
@@ -10,6 +10,8 @@ CLIENT == PESSIMISTIC_CLIENT \union OPTIMISTIC_CLIENT
 
 \* Functions that maps a client to keys it wants to read, write.
 \* representing the involved keys of each client.
+\* Note that "read" here stands for optimistic read, and for 
+\* pessimistic client(s), the constants equals an empty set.
 CONSTANTS CLIENT_READ_KEY, CLIENT_WRITE_KEY
 CLIENT_KEY == [c \in CLIENT |-> CLIENT_READ_KEY[c] \union CLIENT_WRITE_KEY[c]]
 ASSUME \A c \in CLIENT: CLIENT_KEY[c] \subseteq KEY
@@ -416,7 +418,7 @@ ServerLockKey ==
                          type |-> "lock_failed_has_lock",
                          key |-> k,
                          lock_ts |-> l.ts,
-                        lock_type |-> l.type] : l \in key_lock[k]})
+                         lock_type |-> l.type] : l \in key_lock[k]})
           /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
 
 ServerReadKey ==
