@@ -137,14 +137,14 @@ RespMessages ==
   \* We use the value NoneTs to denotes the key not exists.
   \* This convention applies for many definations below.
   \union  [start_ts : Ts, type : {"get_resp"}, key : KEY, value_ts : Ts]
-  \union  [start_ts : Ts, type : {"get_failed"}, key : KEY]
+  \union  [start_ts : Ts, type : {"get_failed"}, primary : KEY, key : KEY, lock_ts : Ts]
 
   \* Conceptually, acquire a pessimistic lock of a key is equivalent to reading its value, 
   \* and putting the value in the response can reduce communication. Also, as mentioned
   \* above, we don’t care about the actual value here, so a timestamp can be used 
   \* instead of the value.
   \union  [start_ts : Ts, type : {"locked_key"}, key : KEY, value_ts : Ts \union {NoneTs}]
-  \union  [start_ts : Ts, type : {"lock_failed_has_lock"}, key : KEY, lock_ts : Ts, 
+  \union  [start_ts : Ts, type : {"lock_failed_has_lock"}, primary : KEY, key : KEY, lock_ts : Ts, 
            lock_type : {"no_lock", "lock_key", "prewrite_pessimistic", "prewrite_optimistic"}]
   \union  [start_ts : Ts, type : {"lock_failed_write_conflict"}, key : KEY, latest_commit_ts : Ts]
   \union  [start_ts : Ts, type : {"committed",
@@ -229,16 +229,19 @@ ClientRetryLockKey(c) ==
               /\ SendReqs({[type |-> "check_txn_status",
                             start_ts |-> resp.lock_ts,
                             caller_start_ts |-> NoneTs,
-                            primary |-> CLIENT_PRIMARY[c],
+                            primary |-> resp.primary,
                             resolving_pessimistic_lock |-> TRUE]})
               /\ UNCHANGED <<resp_msgs, key_vars, client_vars, next_ts>>
             ELSE IF ~ resp.lock_ts = client_ts[c].start_ts
+            THEN
               /\ SendReqs({[type |-> "check_txn_status",
                             start_ts |-> resp.lock_ts,
                             caller_start_ts |-> NoneTs,
-                            primary |-> CLIENT_PRIMARY[c],
+                            primary |-> resp.primary,
                             resolving_pessimistic_lock |-> FALSE]})
               /\ UNCHANGED <<resp_msgs, key_vars, client_vars, next_ts>>
+            ELSE
+              /\ UNCHANGED <<vars>>
       \/ /\ resp.type = "lock_failed_write_conflict"
          /\ resp.start_ts = client_ts[c].start_ts
          /\ resp.latest_commit_ts >= client_ts[c].for_update_ts
@@ -267,7 +270,7 @@ ClientReadFailedCheckTxnStatus(c) ==
     /\ SendReqs({[type |-> "check_txn_status",
                   start_ts |-> resp.lock_ts,
                   caller_start_ts |-> client_ts[c].start_ts,
-                  primary |-> CLIENT_PRIMARY[c],
+                  primary |-> resp.primary,
                   resolving_pessimistic_lock |-> FALSE]})
     /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
 
@@ -383,13 +386,12 @@ ServerLockKey ==
                   \* Because if the latest record is "write", it means that
                   \* a new version is committed after for_update_ts, which
                   \* violates Read Committed guarantee.
-                  IF  ~ \E w \in latest_commit : w.ts > req.for_update_ts
-                  THEN
+                  \/ /\ ~ \E w \in latest_commit : w.ts > req.for_update_ts
                      /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
                                                               primary |-> req.primary,
                                                               min_commit_ts |-> NoneTs,
                                                               type |-> "lock_key"]}]
-                     /\ IF ~ commit_read = {} 
+                    /\ IF ~ commit_read = {}
                         THEN
                           \* Actually there's only one msg to be sent.
                           /\ SendResps({[start_ts |-> start_ts, 
@@ -403,18 +405,20 @@ ServerLockKey ==
                                        key |-> k,
                                        value_ts |-> NoneTs])
                           /\ UNCHANGED <<req_msgs, client_vars, key_data, key_write, next_ts>>
-                  ELSE
                   \* Otherwise, reject the request and let client to retry
                   \* with new for_update_ts.
-                    /\ SendResp([start_ts |-> start_ts,
-                                 type |-> "lock_failed_write_conflict",
-                                 key |-> k,
-                                 latest_commit_ts |-> w.ts])
-                    /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+                  \/ \E w \in latest_commit :
+                      /\ w.ts > req.for_update_ts
+                      /\ SendResp([start_ts |-> start_ts,
+                                   type |-> "lock_failed_write_conflict",
+                                   key |-> k,
+                                   latest_commit_ts |-> w.ts])
+                      /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
         ELSE 
           /\ \E l \in key_lock[k] : ~ l.ts = start_ts 
           /\ SendResps({[start_ts |-> start_ts,
                          type |-> "lock_failed_has_lock",
+                         primary |-> l.primary,
                          key |-> k,
                          lock_ts |-> l.ts,
                          lock_type |-> l.type] : l \in key_lock[k]})
@@ -440,9 +444,11 @@ ServerReadKey ==
                              value_ts |-> w.start_ts] : w \in commit_read})
               /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
             ELSE
-              /\ SendResp([start_ts |-> start_ts,
-                           type |-> "get_failed", 
-                           key |-> k])
+              /\ SendResps({[start_ts |-> start_ts,
+                             type |-> "get_failed",
+                             primary |-> req.primary,
+                             key |-> k,
+                             lock_ts |-> l.ts] : l \in key_lock[k]})
               /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
 
 ServerPrewritePessimistic ==
