@@ -768,24 +768,19 @@ MsgTsConsistency ==
   /\ \A resp \in resp_msgs : resp.start_ts <= next_ts
 
 ReadSnapshotIsolation ==
-  /\ \A resp \in resp_msgs :
-      /\ resp.type = "get_resp"
-      /\ LET
-           start_ts == resp.start_ts
-           key == resp.key
-           \* As mentioned before, the value is just a timestamp
-           value == resp.value
-           met_optimistic_lock == resp.met_optimistic_lock
-         IN
-         /\ \E c \in CLIENT:
-           /\ client_ts[c].start_ts = start_ts
-           /\ IF client_ts[c].commit_ts \in Ts THEN
-                /\ \A w \in key_write[key] :
-                  \/ w.type = "rollback"
-                  \/ w.start_ts > start_ts
-                  \/ w.ts < start_ts 
-              ELSE
-                /\ TRUE
+ /\ \A resp \in resp_msgs :
+     /\ resp.type = "get_resp"
+     /\ LET
+         start_ts == resp.start_ts
+         key == resp.key
+         all_commits_before_start_ts == {w \in key_write[k] : w.type = "write" /\ w.ts <= start_ts}
+         latest_commit_before_start_ts ==
+           {w \in all_commits_before_start_ts :
+             \A w2 \in all_commits_before_start_ts :
+               w.ts >= w2.ts}
+        IN
+         /\ Cardinality(latest_commit_before_start_ts) = 1
+         /\ \A w \in latest_commit_before_start_ts: w.ts = resp.value_ts
 
 \* SnapshotIsolation is implied from the following assumptions (but is not
 \* necessary) because SnapshotIsolation means that: 
