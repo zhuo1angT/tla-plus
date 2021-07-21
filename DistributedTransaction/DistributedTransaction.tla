@@ -773,7 +773,7 @@ ReadSnapshotIsolation ==
      /\ LET
          start_ts == resp.start_ts
          key == resp.key
-         all_commits_before_start_ts == {w \in key_write[k] : w.type = "write" /\ w.ts <= start_ts}
+         all_commits_before_start_ts == {w \in key_write[key] : w.type = "write" /\ w.ts <= start_ts}
          latest_commit_before_start_ts ==
            {w \in all_commits_before_start_ts :
              \A w2 \in all_commits_before_start_ts :
