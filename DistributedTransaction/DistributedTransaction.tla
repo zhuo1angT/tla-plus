@@ -20,6 +20,8 @@ ASSUME \A c \in CLIENT: CLIENT_KEY[c] \subseteq KEY
 CONSTANTS CLIENT_PRIMARY
 ASSUME \A c \in CLIENT: CLIENT_PRIMARY[c] \in CLIENT_KEY[c]
 
+CONSTANTS MAX_LOCK_KEY_TIME
+
 \* Timestamp of transactions.
 Ts == Nat \ {0}
 NoneTs == 0
@@ -203,6 +205,7 @@ ClientLockKey(c) ==
   /\ client_ts' = [client_ts EXCEPT ![c].start_ts = next_ts, ![c].for_update_ts = next_ts]
   /\ next_ts' = next_ts + 1
   /\ client_key' = [client_key EXCEPT ![c].locking = CLIENT_WRITE_KEY[c]]
+  /\ Cardinality({resp \in resp_msgs : resp.type = "lock_key"}) < MAX_LOCK_KEY_TIME
   \* Assume we need to acquire pessimistic locks for all keys
   /\ SendReqs({[type |-> "lock_key",
                 start_ts |-> client_ts'[c].start_ts,
