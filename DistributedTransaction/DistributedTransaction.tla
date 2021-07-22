@@ -151,6 +151,7 @@ RespMessages ==
                                   "commit_aborted",
                                   "prewrite_aborted",
                                   "lock_key_aborted"}]
+  \union  [start_ts : Ts, type : {"commit_failed"}, min_commit_ts : Ts]
   \union  [start_ts : Ts, type : {"check_txn_status_resp"}, 
            action : {"rollbacked",
                      "pessimistic_rollbacked", 
@@ -296,6 +297,19 @@ ClientCommit(c) ==
                 primary |-> CLIENT_PRIMARY[c],
                 commit_ts |-> client_ts'[c].commit_ts]})
   /\ UNCHANGED <<resp_msgs, key_vars, client_key>>
+
+ClientRetryCommit(c) ==
+  /\ client_state[c] = "commiting"
+  /\ \E resp \in resp_msgs :
+    /\ resp.type = "commit_failed"
+    /\ next_ts > resp.min_commit_ts
+    /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = next_ts]
+    /\ next_ts' = next_ts + 1
+    /\ SendReqs({[type |-> "commit",
+                  start_ts |-> client_ts'[c].start_ts,
+                  primary |-> CLIENT_PRIMARY[c],
+                  commit_ts |-> client_ts'[c].commit_ts]})
+    /\ UNCHANGED <<resp_msgs, key_vars, client_key, client_state>>
 -----------------------------------------------------------------------------
 \* Server Actions
 
@@ -653,6 +667,7 @@ Next ==
         \/ ClientPrewriteOptimistic(c)
         \/ ClientPrewrited(c)
         \/ ClientCommit(c)
+        \/ ClientRetryCommit(c)
   \/ \E c \in PESSIMISTIC_CLIENT :
         \/ ClientReadKey(c)  
         \/ ClientLockKey(c)
@@ -661,6 +676,7 @@ Next ==
         \/ ClientPrewritePessimistic(c)
         \/ ClientPrewrited(c)
         \/ ClientCommit(c)
+        \/ ClientRetryCommit(c)
   \/ ServerReadKey
   \/ ServerLockKey
   \/ ServerPrewritePessimistic
