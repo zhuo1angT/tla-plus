@@ -783,26 +783,51 @@ MsgTsConsistency ==
           req.commit_ts <= next_ts
   /\ \A resp \in resp_msgs : resp.start_ts <= next_ts
 
-ReadSnapshotIsolation ==
+OptimisticReadSnapshotIsolation ==
   \A resp \in resp_msgs : resp.type = "get_resp" =>
-      /\ LET
-          start_ts == resp.start_ts
-          key == resp.key
-          all_commits_before_start_ts == {w \in key_write[key] : w.type = "write" /\ w.ts <= start_ts}
-          latest_commit_before_start_ts ==
-            {w \in all_commits_before_start_ts :
-              \A w2 \in all_commits_before_start_ts :
-                w.ts >= w2.ts}
-         IN
-           IF Cardinality(latest_commit_before_start_ts) = 1
-           THEN
-             \A w \in latest_commit_before_start_ts: w.start_ts = resp.value_ts
-           ELSE IF Cardinality(latest_commit_before_start_ts) = 0
-           THEN
-             resp.value_ts = NoneTs
-           ELSE
-             FALSE
-           
+    /\ LET
+        start_ts == resp.start_ts
+        key == resp.key
+        all_commits_before_start_ts == {w \in key_write[key] : w.type = "write" /\ w.ts <= start_ts}
+        latest_commit_before_start_ts ==
+          {w \in all_commits_before_start_ts :
+            \A w2 \in all_commits_before_start_ts :
+              w.ts >= w2.ts}
+        IN
+          IF Cardinality(latest_commit_before_start_ts) = 1
+          THEN
+            \A w \in latest_commit_before_start_ts: w.start_ts = resp.value_ts
+          ELSE IF Cardinality(latest_commit_before_start_ts) = 0
+          THEN
+            resp.value_ts = NoneTs
+          ELSE
+            FALSE
+
+PessimisticReadSnapshotIsolation == 
+  \A resp \in resp_msgs : resp.type = "key_locked" =>
+    /\ LET
+        start_ts == resp.start_ts
+        key == resp.key
+        all_commits_before_start_ts == {w \in key_write[key] : w.type = "write" /\ w.ts <= start_ts}
+        latest_commit_before_start_ts ==
+          {w \in all_commits_before_start_ts :
+            \A w2 \in all_commits_before_start_ts :
+              w.ts >= w2.ts}
+        IN
+          IF Cardinality(latest_commit_before_start_ts) = 1
+          THEN
+            \A w \in latest_commit_before_start_ts: w.start_ts = resp.value_ts
+          ELSE IF Cardinality(latest_commit_before_start_ts) = 0
+          THEN
+            resp.value_ts = NoneTs
+          ELSE
+            FALSE
+
+        
+ReadSnapshotIsolation == OptimisticReadSnapshotIsolation /\ PessimisticReadSnapshotIsolation
+
+
+
 \* SnapshotIsolation is implied from the following assumptions (but is not
 \* necessary) because SnapshotIsolation means that: 
 \*  (1) Once a transaction is committed, all keys of the transaction should
