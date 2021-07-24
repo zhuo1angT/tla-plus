@@ -20,8 +20,6 @@ ASSUME \A c \in CLIENT: CLIENT_KEY[c] \subseteq KEY
 CONSTANTS CLIENT_PRIMARY
 ASSUME \A c \in CLIENT: CLIENT_PRIMARY[c] \in CLIENT_KEY[c]
 
-CONSTANTS MAX_LOCK_KEY_TIME
-
 \* Timestamp of transactions.
 Ts == Nat \ {0}
 NoneTs == 0
@@ -138,7 +136,7 @@ RespMessages ==
           [start_ts : Ts, type : {"prewrited"}, key : KEY]
   \* We use the value NoneTs to denotes the key not exists.
   \* This convention applies for many definations below.
-  \union  [start_ts : Ts, type : {"get_resp"}, key : KEY, value_ts : Ts]
+  \union  [start_ts : Ts, type : {"get_resp"}, key : KEY, value_ts : Ts \union {NoneTs}]
   \union  [start_ts : Ts, type : {"get_failed"}, primary : KEY, key : KEY, lock_ts : Ts]
 
   \* Conceptually, acquire a pessimistic lock of a key is equivalent to reading its value, 
@@ -205,7 +203,6 @@ ClientLockKey(c) ==
   /\ client_ts' = [client_ts EXCEPT ![c].start_ts = next_ts, ![c].for_update_ts = next_ts]
   /\ next_ts' = next_ts + 1
   /\ client_key' = [client_key EXCEPT ![c].locking = CLIENT_WRITE_KEY[c]]
-  /\ Cardinality({resp \in resp_msgs : resp.type = "lock_key"}) < MAX_LOCK_KEY_TIME
   \* Assume we need to acquire pessimistic locks for all keys
   /\ SendReqs({[type |-> "lock_key",
                 start_ts |-> client_ts'[c].start_ts,
@@ -443,11 +440,19 @@ ServerReadKey ==
          IN
          /\ IF ~ \E l \in key_lock[k] : l.type = "prewrite_optimistic"
             THEN
-              /\ SendResps({[start_ts |-> start_ts, 
-                             type |-> "get_resp", 
-                             key |-> k, 
-                             value_ts |-> w.start_ts] : w \in commit_read})
-              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+              IF commit_read = {}
+              THEN
+                /\ SendResp([start_ts |-> start_ts, 
+                               type |-> "get_resp", 
+                               key |-> k, 
+                               value_ts |-> NoneTs])
+                /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+              ELSE
+                /\ SendResps({[start_ts |-> start_ts, 
+                               type |-> "get_resp", 
+                               key |-> k, 
+                               value_ts |-> w.start_ts] : w \in commit_read})
+                /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
             ELSE
               /\ SendResps({[start_ts |-> start_ts,
                              type |-> "get_failed",
@@ -522,12 +527,16 @@ ServerCommit ==
         ELSE
           IF \E l \in key_lock[pk] :
             /\ l.ts = start_ts
-            /\ next_ts > l.min_commit_ts
           THEN
-            \* Commit the key only if the prewrite lock exists.
-            /\ commit(pk, start_ts, req.commit_ts)
-            /\ SendResp([start_ts |-> start_ts, type |-> "committed"])
-            /\ UNCHANGED <<req_msgs, client_vars, key_data, next_ts>>
+            IF \E l \in key_lock[pk] : l.ts = start_ts /\ next_ts > l.min_commit_ts
+            THEN
+              \* Commit the key only if the prewrite lock exists.
+              /\ commit(pk, start_ts, req.commit_ts)
+              /\ SendResp([start_ts |-> start_ts, type |-> "committed"])
+              /\ UNCHANGED <<req_msgs, client_vars, key_data, next_ts>>
+            ELSE
+              /\ SendResps({[start_ts |-> start_ts, type |-> "commit_failed", min_commit_ts |-> l.min_commit_ts] : l \in key_lock[pk]})
+              /\ UNCHANGED <<req_msgs, client_vars, key_data, next_ts>>
           ELSE
             \* Otherwise, abort the transaction.
             /\ SendResp([start_ts |-> start_ts, type |-> "commit_aborted"])
@@ -582,8 +591,6 @@ ServerCheckTxnStatus ==
               /\ UNCHANGED <<client_vars, next_ts>>
           \/
             \* Push min_commit_ts.
-            \* We must ensure that this is not the last chance for this txn 
-            \* to be checked, otherwise, we would make a deadlock.
             /\ \A c \in CLIENT : client_ts[c].start_ts = start_ts 
             /\ \E lock \in key_lock[pk] :
               /\ lock.min_commit_ts < caller_start_ts
