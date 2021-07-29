@@ -674,7 +674,6 @@ Init ==
 Next ==
   \/ \E c \in OPTIMISTIC_CLIENT :
         \/ ClientReadKey(c)  
-        \/ ClientReadFailedCheckTxnStatus(c)
         \/ ClientPrewriteOptimistic(c)
         \/ ClientPrewrited(c)
         \/ ClientCommit(c)
@@ -682,12 +681,8 @@ Next ==
   \/ \E c \in PESSIMISTIC_CLIENT :
         \/ ClientReadKey(c)  
         \/ ClientLockKey(c)
-        \/ ClientLockedKey(c)
-        \/ ClientRetryLockKey(c)
         \/ ClientPrewritePessimistic(c)
-        \/ ClientPrewrited(c)
         \/ ClientCommit(c)
-        \/ ClientRetryCommit(c)
   \/ ServerReadKey
   \/ ServerLockKey
   \/ ServerPrewritePessimistic
