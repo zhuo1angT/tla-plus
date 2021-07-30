@@ -412,44 +412,50 @@ ServerLockKey ==
                                                               primary |-> req.primary,
                                                               min_commit_ts |-> NoneTs,
                                                               type |-> "lock_key"]}]
-                    /\ IF ~ commit_read = {}
+                     /\ IF ~ commit_read = {}
                         THEN
                           LET
                            commit_record == CHOOSE value \in commit_read : TRUE
                            value_ts == commit_record.start_ts
                           IN
-                          /\ ClientLockedKey([start_ts |-> start_ts, 
-                                              type |-> "locked_key", 
-                                              key |-> k, 
-                                              value_ts |-> value_ts])
-                          /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts>>
+                          /\ \/ /\ ClientLockedKey([start_ts |-> start_ts, 
+                                                    type |-> "locked_key", 
+                                                    key |-> k, 
+                                                    value_ts |-> value_ts])
+                                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts>>
+                             \/ /\ UNCHANGED <<msg_vars, client_vars, key_data, key_write, next_ts>>
                         ELSE
-                          /\ ClientLockedKey([start_ts |-> start_ts, 
-                                              type |-> "locked_key",
-                                              key |-> k,
-                                              value_ts |-> NoneTs])
-                          /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts>>
+                          /\ \/ /\ ClientLockedKey([start_ts |-> start_ts, 
+                                                    type |-> "locked_key",
+                                                    key |-> k,
+                                                    value_ts |-> NoneTs])
+                                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts>>
+                             \/ /\ UNCHANGED <<msg_vars, client_vars, key_data, key_write, next_ts>>
                   \* Otherwise, reject the request and let client to retry
                   \* with new for_update_ts.
                   \/ \E w \in latest_commit :
-                      /\ w.ts > req.for_update_ts
-                      /\ ClientRetryLockKey([start_ts |-> start_ts,
-                                             type |-> "lock_failed_write_conflict",
-                                             key |-> k,
-                                             latest_commit_ts |-> w.ts])
-                      /\ UNCHANGED <<resp_msgs, client_state, client_key, key_vars, next_ts>>
-        ELSE 
+                    \/ /\ w.ts > req.for_update_ts
+                       /\ \/ /\ ~ \E w2 \in all_commits : w2.start_ts = req.start_ts
+                             /\ ClientRetryLockKey([start_ts |-> start_ts,
+                                                    type |-> "lock_failed_write_conflict",
+                                                    key |-> k,
+                                                    latest_commit_ts |-> w.ts])
+                             /\ UNCHANGED <<resp_msgs, client_state, client_key, key_vars, next_ts>>
+                          \/ /\ UNCHANGED <<vars>>
+
+        ELSE
           LET 
            l == CHOOSE lock \in key_lock[k] : TRUE
           IN
           /\ l.ts /= start_ts 
-          /\ ClientRetryLockKey([start_ts |-> start_ts,
-                                 type |-> "lock_failed_has_lock",
-                                 primary |-> l.primary,
-                                 key |-> k,
-                                 lock_ts |-> l.ts,
-                                 lock_type |-> l.type])
-          /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+          /\ \/ /\ ClientRetryLockKey([start_ts |-> start_ts,
+                                       type |-> "lock_failed_has_lock",
+                                       primary |-> l.primary,
+                                       key |-> k,
+                                       lock_ts |-> l.ts,
+                                       lock_type |-> l.type])
+                /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+             \/ /\ UNCHANGED <<vars>>
 
 ServerReadKey ==
   \E req \in req_msgs :
@@ -483,12 +489,13 @@ ServerReadKey ==
               LET
                l == CHOOSE lock \in key_lock[k] : TRUE
               IN
-              /\ ClientReadFailedCheckTxnStatus([start_ts |-> start_ts,
-                                                 type |-> "get_failed",
-                                                 primary |-> l.primary,
-                                                 key |-> k,
-                                                 lock_ts |-> l.ts])
-              /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+              \/ /\ ClientReadFailedCheckTxnStatus([start_ts |-> start_ts,
+                                                    type |-> "get_failed",
+                                                    primary |-> l.primary,
+                                                    key |-> k,
+                                                    lock_ts |-> l.ts])
+                 /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+              \/ /\ UNCHANGED <<vars>>
 
 ServerPrewritePessimistic ==
   \E req \in req_msgs :
@@ -506,13 +513,14 @@ ServerPrewritePessimistic ==
              \/ \E l \in key_lock[k] :
                 /\ l.ts = start_ts
            THEN
-             /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
-                                                      primary |-> req.primary,
-                                                      type |-> "prewrite_pessimistic",
-                                                      min_commit_ts |-> NoneTs]}]
-             /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
-             /\ ClientPrewrited([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
-             /\ UNCHANGED <<msg_vars, client_state, client_ts, key_write, next_ts>>
+             \/ /\ key_lock' = [key_lock EXCEPT ![k] = {[ts |-> start_ts,
+                                                         primary |-> req.primary,
+                                                         type |-> "prewrite_pessimistic",
+                                                         min_commit_ts |-> NoneTs]}]
+                /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
+                /\ ClientPrewrited([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
+                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_write, next_ts>>
+             \/ /\ UNCHANGED <<vars>>
            ELSE
              /\ SendResp([start_ts |-> start_ts, type |-> "prewrite_aborted"])
              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
@@ -538,8 +546,9 @@ ServerPrewriteOptimistic ==
                                                        min_commit_ts |-> NoneTs,
                                                        type |-> "prewrite_optimistic"]}]
               /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
-              /\ ClientPrewrited([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
-              /\ UNCHANGED <<req_msgs, resp_msgs, client_state, client_ts, key_write, next_ts>>
+              /\ \/ /\ ClientPrewrited([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
+                    /\ UNCHANGED <<req_msgs, resp_msgs, client_state, client_ts, key_write, next_ts>>
+                 \/ /\ UNCHANGED <<msg_vars, client_vars, key_write, next_ts>>
 
 ServerCommit ==
   \E req \in req_msgs :
