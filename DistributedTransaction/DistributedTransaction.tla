@@ -24,6 +24,10 @@ ASSUME \A c \in CLIENT: CLIENT_PRIMARY[c] \in CLIENT_KEY[c]
 Ts == Nat \ {0}
 NoneTs == 0
 
+\* for now, use this as a global max_ts, optimistic read of any key will update
+\* this variable.
+VARIABLES max_ts
+
 \* The algorithm is easier to understand in terms of the set of msgs of
 \* all messages that have ever been sent.  A more accurate model would use
 \* one or more variables to represent the messages actually in transit,
@@ -171,14 +175,20 @@ RespMessages ==
 TypeOK == /\ req_msgs \in SUBSET ReqMessages
           /\ resp_msgs \in SUBSET RespMessages
           /\ key_data \in [KEY -> SUBSET Ts]
-          /\ key_lock \in [KEY -> SUBSET [ts : Ts, 
+          /\ key_lock \in [KEY -> SUBSET 
+                                         [ts : Ts, 
                                           primary : KEY, 
                                           \* As defined above, Ts == Nat \ 0, here we use 0
                                           \* to indicates that there's no min_commit_ts limit.
                                           min_commit_ts : Ts \union {NoneTs},
                                           type : {"prewrite_optimistic",
                                                   "prewrite_pessimistic",
-                                                  "lock_key"}]]
+                                                  "lock_key"}]
+                                  \union [ts : Ts,
+                                          primary: KEY,
+                                          min_commit_ts : Ts \union {NoneTs},
+                                          type : {"prewrite_async"},
+                                          keys: SUBSET KEY]]
           \* At most one lock in key_lock[k]
           /\ \A k \in KEY: Cardinality(key_lock[k]) <= 1
           /\ key_write \in [KEY -> SUBSET (
@@ -836,25 +846,8 @@ OptimisticReadSnapshotIsolation ==
           ELSE
             FALSE
 
-PessimisticReadSnapshotIsolation == 
-  \A resp \in resp_msgs : resp.type = "key_locked" =>
-    /\ LET
-        start_ts == resp.start_ts
-        key == resp.key
-        all_commits_before_start_ts == {w \in key_write[key] : w.type = "write" /\ w.ts <= start_ts}
-        latest_commit_before_start_ts ==
-          {w \in all_commits_before_start_ts :
-            \A w2 \in all_commits_before_start_ts :
-              w.ts >= w2.ts}
-        IN
-          IF Cardinality(latest_commit_before_start_ts) = 1
-          THEN
-            \A w \in latest_commit_before_start_ts: w.start_ts = resp.value_ts
-          ELSE IF Cardinality(latest_commit_before_start_ts) = 0
-          THEN
-            resp.value_ts = NoneTs
-          ELSE
-            FALSE
+\* TODO
+PessimisticReadSnapshotIsolation == TRUE
 
         
 ReadSnapshotIsolation == OptimisticReadSnapshotIsolation /\ PessimisticReadSnapshotIsolation
