@@ -8,6 +8,9 @@ CONSTANTS KEY
 CONSTANTS OPTIMISTIC_CLIENT, PESSIMISTIC_CLIENT
 CLIENT == PESSIMISTIC_CLIENT \union OPTIMISTIC_CLIENT
 
+\* The set of clients who tries to use async commit.
+CONSTANTS ASYNC_CLIENT
+
 \* Functions that maps a client to keys it wants to read, write.
 \* representing the involved keys of each client.
 \* Note that "read" here stands for optimistic read, and for 
@@ -317,13 +320,25 @@ ClientCommit(c) ==
   /\ client_state[c] = "prewriting"
   /\ client_key[c].prewriting = {}
   /\ client_state' = [client_state EXCEPT ![c] = "committing"]
-  /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = next_ts]
-  /\ next_ts' = next_ts + 1
-  /\ SendReqs({[type |-> "commit",
-                start_ts |-> client_ts'[c].start_ts,
-                primary |-> CLIENT_PRIMARY[c],
-                commit_ts |-> client_ts'[c].commit_ts]})
-  /\ UNCHANGED <<resp_msgs, key_vars, client_key>>
+  IF ~ c \in ASYNC_CLIENT
+  THEN
+    /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = next_ts]
+    /\ next_ts' = next_ts + 1
+    /\ SendReqs({[type |-> "commit",
+                  start_ts |-> client_ts'[c].start_ts,
+                  primary |-> CLIENT_PRIMARY[c],
+                  commit_ts |-> client_ts'[c].commit_ts]})
+    /\ UNCHANGED <<resp_msgs, key_vars, client_key>>
+  ELSE
+  LET
+   commit_ts == max_ts + 1
+  IN
+  /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = commit_ts]
+  /\ SendReq({[type |-> "commit",
+               start_ts |-> client_ts'[c].start_ts,
+               primary |-> CLIENT_PRIMARY[c],
+               commit_ts |-> client_ts'[c].commit_ts]})
+  /\ UNCHANGED <<resp_msgs, key_vars, client_key, next_ts>>
 
 ClientRetryCommit(resp) ==
   LET
