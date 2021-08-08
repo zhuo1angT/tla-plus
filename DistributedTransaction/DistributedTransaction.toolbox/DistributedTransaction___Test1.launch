@@ -12,7 +12,7 @@
     <stringAttribute key="distributedTLC" value="off"/>
     <stringAttribute key="distributedTLCVMArgs" value=""/>
     <intAttribute key="fpBits" value="1"/>
-    <intAttribute key="fpIndex" value="107"/>
+    <intAttribute key="fpIndex" value="33"/>
     <booleanAttribute key="fpIndexRandom" value="true"/>
     <intAttribute key="maxHeapSize" value="75"/>
     <intAttribute key="maxSetSize" value="1000000"/>
@@ -21,7 +21,7 @@
     <stringAttribute key="modelBehaviorNext" value=""/>
     <stringAttribute key="modelBehaviorSpec" value="Spec"/>
     <intAttribute key="modelBehaviorSpecType" value="1"/>
-    <stringAttribute key="modelBehaviorVars" value="key_data, key_lock, next_ts, req_msgs, client_state, client_key, client_ts, resp_msgs, key_write"/>
+    <stringAttribute key="modelBehaviorVars" value="key_data, key_lock, next_ts, req_msgs, max_ts, client_state, client_key, client_ts, resp_msgs, key_write"/>
     <stringAttribute key="modelComments" value=""/>
     <booleanAttribute key="modelCorrectnessCheckDeadlock" value="false"/>
     <listAttribute key="modelCorrectnessInvariants">
@@ -48,6 +48,7 @@
         <listEntry value="CLIENT_PRIMARY;;c1 :&gt; k1 @@ c2 :&gt; k1 @@ c3 :&gt; k2;0;0"/>
         <listEntry value="CLIENT_WRITE_KEY;;c1 :&gt; {k1, k2} @@ c2 :&gt; {k1} @@ c3 :&gt; {k1, k2};0;0"/>
         <listEntry value="CLIENT_READ_KEY;;c1 :&gt; {} @@ c2 :&gt; {} @@ c3 :&gt; {k1, k2};0;0"/>
+        <listEntry value="ASYNC_CLIENT;;{c3};0;0"/>
     </listAttribute>
     <intAttribute key="modelVersion" value="20191005"/>
     <intAttribute key="numberOfWorkers" value="7"/>

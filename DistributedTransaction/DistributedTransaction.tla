@@ -101,7 +101,7 @@ VARIABLES next_ts
 msg_vars == <<req_msgs, resp_msgs>>
 client_vars == <<client_state, client_ts, client_key>>
 key_vars == <<key_data, key_lock, key_write>>
-vars == <<msg_vars, client_vars, key_vars, next_ts>>
+vars == <<max_ts, msg_vars, client_vars, key_vars, next_ts>>
 
 SendReq(msg) == req_msgs' = req_msgs \union {msg}
 SendReqs(msgs) == req_msgs' = req_msgs \union msgs
@@ -217,7 +217,7 @@ ClientReadKey(c) ==
                 start_ts |-> client_ts[c].start_ts,
                 primary |-> CLIENT_PRIMARY[c],
                 key |-> k] : k \in CLIENT_READ_KEY[c]})
-  /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+  /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts, max_ts>>
 
 ClientLockKey(c) ==
   /\ client_state[c] = "init"
@@ -231,7 +231,7 @@ ClientLockKey(c) ==
                 primary |-> CLIENT_PRIMARY[c],
                 key |-> k,
                 for_update_ts |-> client_ts'[c].for_update_ts] : k \in CLIENT_WRITE_KEY[c]})
-  /\ UNCHANGED <<resp_msgs, key_vars>>
+  /\ UNCHANGED <<resp_msgs, key_vars, max_ts>>
 
 ClientLockedKey(resp) ==
   LET
@@ -278,7 +278,7 @@ ClientPrewritePessimistic(c) ==
                 start_ts |-> client_ts[c].start_ts,
                 primary |-> CLIENT_PRIMARY[c],
                 key |-> k] : k \in CLIENT_WRITE_KEY[c]})
-  /\ UNCHANGED <<resp_msgs, key_vars, client_ts, next_ts>>
+  /\ UNCHANGED <<resp_msgs, key_vars, client_ts, next_ts, max_ts>>
 
 ClientReadFailedCheckTxnStatus(resp) ==
   LET
@@ -302,7 +302,7 @@ ClientPrewriteOptimistic(c) ==
                 start_ts |-> client_ts'[c].start_ts,
                 primary |-> CLIENT_PRIMARY[c],
                 key |-> k] : k \in CLIENT_WRITE_KEY[c]})
-  /\ UNCHANGED <<resp_msgs, key_vars>>
+  /\ UNCHANGED <<resp_msgs, key_vars, max_ts>>
 
 ClientPrewrited(resp) ==
   LET
@@ -320,25 +320,27 @@ ClientCommit(c) ==
   /\ client_state[c] = "prewriting"
   /\ client_key[c].prewriting = {}
   /\ client_state' = [client_state EXCEPT ![c] = "committing"]
-  IF ~ c \in ASYNC_CLIENT
-  THEN
-    /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = next_ts]
-    /\ next_ts' = next_ts + 1
-    /\ SendReqs({[type |-> "commit",
+  /\ IF ~ c \in ASYNC_CLIENT
+     THEN
+       /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = next_ts]
+       /\ next_ts' = next_ts + 1
+       /\ SendReqs({[type |-> "commit",
+                     start_ts |-> client_ts'[c].start_ts,
+                     primary |-> CLIENT_PRIMARY[c],
+                     commit_ts |-> client_ts'[c].commit_ts]})
+       /\ UNCHANGED <<resp_msgs, key_vars, client_key, max_ts>>
+     ELSE
+     LET
+      commit_ts == IF client_ts[c].start_ts + 1 > max_ts + 1
+                   THEN client_ts[c].start_ts + 1
+                   ELSE max_ts + 1
+     IN
+     /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = commit_ts]
+     /\ SendReqs({[type |-> "commit",
                   start_ts |-> client_ts'[c].start_ts,
                   primary |-> CLIENT_PRIMARY[c],
                   commit_ts |-> client_ts'[c].commit_ts]})
-    /\ UNCHANGED <<resp_msgs, key_vars, client_key>>
-  ELSE
-  LET
-   commit_ts == max_ts + 1
-  IN
-  /\ client_ts' = [client_ts EXCEPT ![c].commit_ts = commit_ts]
-  /\ SendReq({[type |-> "commit",
-               start_ts |-> client_ts'[c].start_ts,
-               primary |-> CLIENT_PRIMARY[c],
-               commit_ts |-> client_ts'[c].commit_ts]})
-  /\ UNCHANGED <<resp_msgs, key_vars, client_key, next_ts>>
+     /\ UNCHANGED <<resp_msgs, key_vars, client_key, next_ts, max_ts>>
 
 ClientRetryCommit(resp) ==
   LET
@@ -425,7 +427,7 @@ ServerLockKey ==
                   \* indicates that the transcation is rollbacked, abort the
                   \* transaction.
                   /\ SendResp([start_ts |-> start_ts, type |-> "lock_key_aborted"])
-                  /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+                  /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts, max_ts>>
                 ELSE
                   \* Acquire pessimistic lock only if for_update_ts of req
                   \* is greater or equal to the latest "write" record.
@@ -447,15 +449,15 @@ ServerLockKey ==
                                                     type |-> "locked_key", 
                                                     key |-> k, 
                                                     value_ts |-> value_ts])
-                                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts>>
-                             \/ /\ UNCHANGED <<msg_vars, client_vars, key_data, key_write, next_ts>>
+                                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts, max_ts>>
+                             \/ /\ UNCHANGED <<msg_vars, client_vars, key_data, key_write, next_ts, max_ts>>
                         ELSE
                           /\ \/ /\ ClientLockedKey([start_ts |-> start_ts, 
                                                     type |-> "locked_key",
                                                     key |-> k,
                                                     value_ts |-> NoneTs])
-                                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts>>
-                             \/ /\ UNCHANGED <<msg_vars, client_vars, key_data, key_write, next_ts>>
+                                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_data, key_write, next_ts, max_ts>>
+                             \/ /\ UNCHANGED <<msg_vars, client_vars, key_data, key_write, next_ts, max_ts>>
                   \* Otherwise, reject the request and let client to retry
                   \* with new for_update_ts.
                   \/ \E w \in latest_commit :
@@ -465,7 +467,7 @@ ServerLockKey ==
                                                     type |-> "lock_failed_write_conflict",
                                                     key |-> k,
                                                     latest_commit_ts |-> w.ts])
-                             /\ UNCHANGED <<resp_msgs, client_state, client_key, key_vars, next_ts>>
+                             /\ UNCHANGED <<resp_msgs, client_state, client_key, key_vars, next_ts, max_ts>>
                           \/ /\ UNCHANGED <<vars>>
 
         ELSE
@@ -479,7 +481,7 @@ ServerLockKey ==
                                        key |-> k,
                                        lock_ts |-> l.ts,
                                        lock_type |-> l.type])
-                /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+                /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts, max_ts>>
              \/ /\ UNCHANGED <<vars>>
 
 ServerReadKey ==
@@ -497,14 +499,21 @@ ServerReadKey ==
          /\ IF \/ key_lock[k] = {}
                \/ \E l \in key_lock[k] : l.type = "lock_key"
             THEN
+              LET
+               upd_max_ts == IF start_ts > max_ts 
+                             THEN start_ts
+                             ELSE max_ts
+              IN
               IF commit_read = {}
               THEN
+                /\ max_ts' = upd_max_ts
                 /\ SendResp([start_ts |-> start_ts, 
                                type |-> "get_resp", 
                                key |-> k, 
                                value_ts |-> NoneTs])
                 /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
               ELSE
+                /\ max_ts' = upd_max_ts
                 /\ SendResps({[start_ts |-> start_ts, 
                                type |-> "get_resp", 
                                key |-> k, 
@@ -519,7 +528,7 @@ ServerReadKey ==
                                                     primary |-> l.primary,
                                                     key |-> k,
                                                     lock_ts |-> l.ts])
-                 /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+                 /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts, max_ts>>
               \/ /\ UNCHANGED <<vars>>
 
 ServerPrewritePessimistic ==
@@ -544,11 +553,11 @@ ServerPrewritePessimistic ==
                                                          min_commit_ts |-> NoneTs]}]
                 /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
                 /\ ClientPrewrited([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
-                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_write, next_ts>>
+                /\ UNCHANGED <<msg_vars, client_state, client_ts, key_write, next_ts, max_ts>>
              \/ /\ UNCHANGED <<vars>>
            ELSE
              /\ SendResp([start_ts |-> start_ts, type |-> "prewrite_aborted"])
-             /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+             /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts, max_ts>>
 
 ServerPrewriteOptimistic ==
   \E req \in req_msgs :
@@ -560,7 +569,7 @@ ServerPrewriteOptimistic ==
         /\ IF \E w \in key_write[k] : w.ts >= start_ts
            THEN
               /\ SendResp([start_ts |-> start_ts, type |-> "prewrite_aborted"])
-              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+              /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts, max_ts>>
            ELSE
               \* Optimistic prewrite is allowed only if no stale lock exists.  If
               \* there is one, wait until ClientCheckTxnStatus to clean it up.
@@ -572,8 +581,8 @@ ServerPrewriteOptimistic ==
                                                        type |-> "prewrite_optimistic"]}]
               /\ key_data' = [key_data EXCEPT ![k] = @ \union {start_ts}]
               /\ \/ /\ ClientPrewrited([start_ts |-> start_ts, type |-> "prewrited", key |-> k])
-                    /\ UNCHANGED <<req_msgs, resp_msgs, client_state, client_ts, key_write, next_ts>>
-                 \/ /\ UNCHANGED <<msg_vars, client_vars, key_write, next_ts>>
+                    /\ UNCHANGED <<req_msgs, resp_msgs, client_state, client_ts, key_write, next_ts, max_ts>>
+                 \/ /\ UNCHANGED <<msg_vars, client_vars, key_write, next_ts, max_ts>>
 
 ServerCommit ==
   \E req \in req_msgs :
@@ -586,7 +595,7 @@ ServerCommit ==
         THEN
           \* Key has already been committed.  Do nothing.
           /\ SendResp([start_ts |-> start_ts, type |-> "committed"])
-          /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+          /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts, max_ts>>
         ELSE
           IF \E l \in key_lock[pk] :
             /\ l.ts = start_ts
@@ -596,17 +605,17 @@ ServerCommit ==
               \* Commit the key only if the prewrite lock exists.
               /\ commit(pk, start_ts, req.commit_ts)
               /\ SendResp([start_ts |-> start_ts, type |-> "committed"])
-              /\ UNCHANGED <<req_msgs, client_vars, key_data, next_ts>>
+              /\ UNCHANGED <<req_msgs, client_vars, key_data, next_ts, max_ts>>
             ELSE
               LET
                l == CHOOSE l \in key_lock[pk] : TRUE
               IN
               /\ SendResps([start_ts |-> start_ts, type |-> "commit_failed", min_commit_ts |-> l.min_commit_ts])
-              /\ UNCHANGED <<client_state, client_ts, key_data>>
+              /\ UNCHANGED <<client_state, client_ts, key_data, max_ts>>
           ELSE
             \* Otherwise, abort the transaction.
             /\ SendResp([start_ts |-> start_ts, type |-> "commit_aborted"])
-            /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts>>
+            /\ UNCHANGED <<req_msgs, client_vars, key_vars, next_ts, max_ts>>
 
 \* Clean up the stale transaction by checking the status of the primary key.
 \*
@@ -645,7 +654,7 @@ ServerCheckTxnStatus ==
               \* /\ SendResp([type |-> "check_txn_status_resp",
               \*            start_ts |-> start_ts,
               \*             action |-> "pessimistic_rollbacked"])
-              /\ UNCHANGED <<msg_vars, key_data, key_write, client_vars, next_ts>>
+              /\ UNCHANGED <<msg_vars, key_data, key_write, client_vars, next_ts, max_ts>>
             ELSE
               /\ rollback(pk, start_ts)
               /\ SendReqs({[type |-> "resolve_rollbacked",
@@ -654,7 +663,7 @@ ServerCheckTxnStatus ==
               \*  /\ SendResp([type |-> "check_txn_status_resp",
               \*               start_ts |-> start_ts,
               \*               action |-> "rollbacked"])
-              /\ UNCHANGED <<resp_msgs, client_vars, next_ts>>
+              /\ UNCHANGED <<resp_msgs, client_vars, next_ts, max_ts>>
           \/
             \* Push min_commit_ts.
             /\ \A c \in CLIENT : client_ts[c].start_ts = start_ts 
@@ -667,7 +676,7 @@ ServerCheckTxnStatus ==
               \*  /\ SendResp([type |-> "check_txn_status_resp",
               \*               start_ts |-> start_ts,
               \*               action |-> "min_commit_ts_pushed"])
-              /\ UNCHANGED <<msg_vars, key_data, key_write, client_vars, next_ts>>
+              /\ UNCHANGED <<msg_vars, key_data, key_write, client_vars, next_ts, max_ts>>
           \* Lock not found or start_ts on the lock mismatches.
           ELSE
             IF committed /= {} THEN
@@ -678,12 +687,12 @@ ServerCheckTxnStatus ==
               \* /\ SendResp([type |-> "check_txn_status_resp",
               \*              start_ts |-> start_ts,
               \*              action |-> "committed"])
-              /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts>>
+              /\ UNCHANGED <<resp_msgs, client_vars, key_vars, next_ts, max_ts>>
             ELSE IF req.resolving_pessimistic_lock = TRUE THEN
               \* /\ SendResp([type |-> "check_txn_status_resp",
               \*              start_ts |-> start_ts,
               \*              action |-> "lock_not_exist_do_nothing"])
-              /\ UNCHANGED <<msg_vars, client_vars, key_vars, next_ts>>
+              /\ UNCHANGED <<msg_vars, client_vars, key_vars, next_ts, max_ts>>
             ELSE
               /\ rollback(pk, start_ts)
               /\ SendReqs({[type |-> "resolve_rollbacked",
@@ -692,7 +701,7 @@ ServerCheckTxnStatus ==
               \* /\ SendResp([type |-> "check_txn_status_resp",
               \*              start_ts |-> start_ts,
               \*              action |-> "rollbacked"])
-              /\ UNCHANGED <<resp_msgs, client_vars, next_ts>>
+              /\ UNCHANGED <<resp_msgs, client_vars, next_ts, max_ts>>
 
 ServerResolveCommitted ==
   \E req \in req_msgs :
@@ -705,7 +714,7 @@ ServerResolveCommitted ==
             /\ l.primary = req.primary
             /\ l.ts = start_ts
             /\ commit(k, start_ts, req.commit_ts)
-            /\ UNCHANGED <<msg_vars, client_vars, key_data, next_ts>>
+            /\ UNCHANGED <<msg_vars, client_vars, key_data, next_ts, max_ts>>
 
 ServerResolveRollbacked ==
   \E req \in req_msgs :
@@ -718,12 +727,13 @@ ServerResolveRollbacked ==
             /\ l.primary = req.primary
             /\ l.ts = start_ts
             /\ rollback(k, start_ts)
-            /\ UNCHANGED <<msg_vars, client_vars, next_ts>>
+            /\ UNCHANGED <<msg_vars, client_vars, next_ts, max_ts>>
 -----------------------------------------------------------------------------
 \* Specification
 
 Init == 
   /\ next_ts = 1
+  /\ max_ts = 1
   /\ req_msgs = {}
   /\ resp_msgs = {}
   /\ client_state = [c \in CLIENT |-> "init"]
